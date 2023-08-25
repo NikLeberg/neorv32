@@ -73,9 +73,9 @@ __crt0_reg_file_init:
 //addi  x2, x0, 0 // stack pointer sp
 //addi  x3, x0, 0 // global pointer gp
   addi  x4, x0, 0
-  addi  x5, x0, 0
-  addi  x6, x0, 0
-  addi  x7, x0, 0
+  addi  x5, x0, 0 // temporary t0
+  addi  x6, x0, 0 // temporary t1
+  addi  x7, x0, 0 // temporary t2
   addi  x8, x0, 0
   addi  x9, x0, 0
 //addi x10, x0, 0 // implicitly initialized within crt0
@@ -97,28 +97,36 @@ __crt0_reg_file_init:
   addi x25, x0, 0
   addi x26, x0, 0
   addi x27, x0, 0
-  addi x28, x0, 0
-  addi x29, x0, 0
-  addi x30, x0, 0
-  addi x31, x0, 0
+  addi x28, x0, 0 // temporary t3
+  addi x29, x0, 0 // temporary t4
+  addi x30, x0, 0 // temporary t5
+  addi x31, x0, 0 // temporary t6
 #endif
+
+
+// ************************************************************************************************
+// Continue boot with primary hart
+// ************************************************************************************************
+__crt0_cpu_primary_hart:
+  csrr t0, mhartid
+  bnez t0, __crt0_cpu_secondary_hart
 
 
 // ************************************************************************************************
 // Copy initialized .data section from ROM to RAM (word-wise, section begins and ends on word boundary)
 // ************************************************************************************************
 __crt0_copy_data:
-  la   x11, __crt0_copy_data_src_begin     // start of data area (copy source)
-  la   x12, __crt0_copy_data_dst_begin     // start of data area (copy destination)
-  la   x13, __crt0_copy_data_dst_end       // last address of destination data area
-  beq  x11, x12, __crt0_copy_data_loop_end // nothing to do if source and destination address are the same
+  la   t0,    __crt0_copy_data_src_begin     // start of data area (copy source)
+  la   t2,    __crt0_copy_data_dst_begin     // start of data area (copy destination)
+  la   t3,    __crt0_copy_data_dst_end       // last address of destination data area
+  beq  t0,    t2, __crt0_copy_data_loop_end  // nothing to do if source and destination address are the same
 
 __crt0_copy_data_loop:
-  bge  x12, x13,  __crt0_copy_data_loop_end
-  lw   x14, 0(x11)
-  sw   x14, 0(x12)
-  addi x11, x11, 4
-  addi x12, x12, 4
+  bge  t2, t3,   __crt0_copy_data_loop_end
+  lw   t4, 0(t0)
+  sw   t4, 0(t2)
+  addi t0, t0, 4
+  addi t2, t2, 4
   j    __crt0_copy_data_loop
 
 __crt0_copy_data_loop_end:
@@ -128,13 +136,13 @@ __crt0_copy_data_loop_end:
 // Clear .bss section (word-wise, section begins and ends on word boundary)
 // ************************************************************************************************
 __crt0_clear_bss:
-  la   x14,  __crt0_bss_start
-  la   x15,  __crt0_bss_end
+  la   t0,   __crt0_bss_start
+  la   t1,   __crt0_bss_end
 
 __crt0_clear_bss_loop:
-  bge  x14,  x15, __crt0_clear_bss_loop_end
-  sw   zero, 0(x14)
-  addi x14,  x14, 4
+  bge  t0,   t1,   __crt0_clear_bss_loop_end
+  sw   zero, 0(t0)
+  addi t0,   t0, 4
   j    __crt0_clear_bss_loop
 
 __crt0_clear_bss_loop_end:
@@ -234,6 +242,45 @@ __crt0_trap_handler_end:
   csrr  x8,   mscratch
 
   mret
+
+
+// ************************************************************************************************
+// Boot of secondary harts.
+// The primary hart did clear .bss and copied the .data section. The secondary cpus jumped here and
+// get their own stack pointer. Then they wait in a wfi loop for an ipi of the primary hart. The
+// ipi interrupt handler will set the mepc to the main C function and continue there.
+// ************************************************************************************************
+__crt0_cpu_secondary_hart:
+  la   t1, __crt0_stack_size
+__crt0_cpu_secondary_hart_stack_init_loop:
+  sub  sp, sp,   t1  // give hart its own initial stack at:
+  add  t0, t0,   -1  // __crt0_stack_begin - (__crt0_stack_size * hartid)
+  bgtz t0, __crt0_cpu_secondary_hart_stack_init_loop
+
+  la     t0,      __crt0_ipi_trap_handler // configure ipi trap handler
+  csrw   mtvec,   t0
+  csrrwi zero,    mie,  (1 << 3) // enable software interrupt source (MSIP)
+  csrsi  mstatus, 8              // enable machine-level interrupts (MIE)
+
+__crt0_cpu_secondary_sleep:
+  wfi
+  j __crt0_cpu_secondary_sleep
+
+__crt0_ipi_trap_handler:
+  // clear msip bit of this hart in CLINT
+  la     t0,   0xf0000000 // msip base register
+  csrr   t1,   mhartid
+  sll    t1,   t1, 2      // hartid * 4
+  add    t0,   t0, t1
+  sw     zero, 0(t0)      // clear msip
+
+  // enter C main for secondary CPUs
+  addi a0,   zero, 0 // a0 = argc = 0
+  addi a1,   zero, 0 // a1 = argv = 0
+  la   t0,   main    // set exception return address to C main
+  csrw mepc, t0
+  mret
+
 
 .cfi_endproc
 .end
