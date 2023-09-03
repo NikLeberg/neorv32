@@ -286,6 +286,7 @@ architecture neorv32_cpu_control_rtl of neorv32_cpu_control is
     dcsr_rd          : std_ulogic_vector(XLEN-1 downto 0); -- debug mode control and status register
     dpc              : std_ulogic_vector(XLEN-1 downto 0); -- mode program counter
     dscratch0        : std_ulogic_vector(XLEN-1 downto 0); -- debug mode scratch register 0
+    dscratch1        : std_ulogic_vector(XLEN-1 downto 0); -- debug mode scratch register 1
     --
     tdata1_hit_clr   : std_ulogic; -- set to manually clear mcontrol6.hit0
     tdata1_execute   : std_ulogic; -- enable instruction address match trigger
@@ -1220,7 +1221,7 @@ begin
         csr_reg_valid <= bool_to_ulogic_f(CPU_EXTENSION_RISCV_Zicntr); -- available if Zicntr implemented
 
       -- debug-mode CSRs --
-      when csr_dcsr_c | csr_dpc_c | csr_dscratch0_c =>
+      when csr_dcsr_c | csr_dpc_c | csr_dscratch0_c | csr_dscratch1_c =>
         csr_reg_valid <= bool_to_ulogic_f(CPU_EXTENSION_RISCV_Sdext); -- available if debug-mode implemented
 
       -- trigger module CSRs --
@@ -1254,7 +1255,7 @@ begin
   -- -------------------------------------------------------------------------------------------
   csr_priv_check: process(csr, debug_ctrl)
   begin
-    if ((csr.addr = csr_dcsr_c) or (csr.addr = csr_dpc_c) or (csr.addr = csr_dscratch0_c)) and -- debug-mode-only CSR?
+    if ((csr.addr = csr_dcsr_c) or (csr.addr = csr_dpc_c) or (csr.addr = csr_dscratch0_c) or (csr.addr = csr_dscratch1_c)) and -- debug-mode-only CSR?
        (CPU_EXTENSION_RISCV_Sdext = true) and (debug_ctrl.running = '0') then -- debug-mode implemented and not running?
       csr_priv_valid <= '0'; -- invalid access
     elsif (csr.addr(11 downto 8) = csr_cycle_c(11 downto 8)) and -- user-mode counter access
@@ -1659,6 +1660,7 @@ begin
       csr.dcsr_cause       <= (others => '0');
       csr.dpc              <= CPU_BOOT_ADDR(XLEN-1 downto 2) & "00"; -- 32-bit aligned boot address
       csr.dscratch0        <= (others => '0');
+      csr.dscratch1        <= (others => '0');
       csr.tdata1_hit_clr   <= '0';
       csr.tdata1_execute   <= '0';
       csr.tdata1_action    <= '0';
@@ -1779,6 +1781,11 @@ begin
           when csr_dscratch0_c => -- debug mode scratch register 0
             if (CPU_EXTENSION_RISCV_Sdext = true) then
               csr.dscratch0 <= csr.wdata;
+            end if;
+
+          when csr_dscratch1_c => -- debug mode scratch register 1
+            if (CPU_EXTENSION_RISCV_Sdext = true) then
+              csr.dscratch1 <= csr.wdata;
             end if;
 
           -- --------------------------------------------------------------------
@@ -1926,6 +1933,7 @@ begin
         csr.dcsr_cause   <= (others => '0');
         csr.dpc          <= (others => '0');
         csr.dscratch0    <= (others => '0');
+        csr.dscratch1    <= (others => '0');
       end if;
 
       -- no trigger module --
@@ -2120,6 +2128,7 @@ begin
       when csr_dcsr_c      => if (CPU_EXTENSION_RISCV_Sdext) then csr_rdata <= csr.dcsr_rd;   end if; -- debug mode control and status
       when csr_dpc_c       => if (CPU_EXTENSION_RISCV_Sdext) then csr_rdata <= csr.dpc;       end if; -- debug mode program counter
       when csr_dscratch0_c => if (CPU_EXTENSION_RISCV_Sdext) then csr_rdata <= csr.dscratch0; end if; -- debug mode scratch register 0
+      when csr_dscratch1_c => if (CPU_EXTENSION_RISCV_Sdext) then csr_rdata <= csr.dscratch1; end if; -- debug mode scratch register 1
 
       -- --------------------------------------------------------------------
       -- trigger module CSRs --
