@@ -135,6 +135,7 @@ __crt0_copy_data_loop_end:
 // ************************************************************************************************
 // Clear .bss section (word-wise, section begins and ends on word boundary)
 // ************************************************************************************************
+#ifndef SIMULATION // speed up simulation by not clearing
 __crt0_clear_bss:
   la   t0,   __crt0_bss_start
   la   t1,   __crt0_bss_end
@@ -146,6 +147,7 @@ __crt0_clear_bss_loop:
   j    __crt0_clear_bss_loop
 
 __crt0_clear_bss_loop_end:
+#endif
 
 
 // ************************************************************************************************
