@@ -299,7 +299,7 @@ be accessed via the on-chip debugger.
 |=======================
 | Bit   | Name [RISC-V] | Description
 | 31:24 | _reserved_    | reserved; always zero
-| 23:20 | `nscratch`    | `0001`, number of `dscratch*` CPU registers = 1
+| 23:20 | `nscratch`    | `0010`, number of `dscratch*` CPU registers = 2
 | 19:17 | _reserved_    | reserved; always zero
 | 16    | `dataccess`   | `0`, the `data` registers are shadowed in the hart's address space
 | 15:12 | `datasize`    | `0001`, number of 32-bit words in the address space dedicated to shadowing the `data` registers (1 register)
@@ -571,8 +571,8 @@ Executing `dret` outside of debug mode will raise an illegal instruction excepti
 ==== CPU Debug Mode CSRs
 
 Two additional CSRs are required by the _Minimal RISC-V Debug Specification_: the debug mode control and status register
-`dcsr` and the debug program counter `dpc`. An additional general purpose scratch register for debug-mode-only
-(`dscratch0`) allows faster execution by having a fast-accessible backup register.
+`dcsr` and the debug program counter `dpc`. Additional general purpose scratch registers for debug mode only
+(`dscratch0` and `dscratch1) allows faster execution by having a fast-accessible backup register.
 These CSRs are only accessible when the CPU is _in_ debug mode. If these CSRs are accessed outside of debug mode
 an illegal instruction exception is raised.
 
@@ -646,6 +646,20 @@ return to the address stored in `dpc` by automatically moving `dpc` to the progr
 |=======================
 | Name        | Debug scratch register 0
 | Address     | `0x7b2`
+| Reset value | `0x00000000`
+| ISA         | `Zicsr` & `Sdext`
+| Description | The register provides a general purpose debug mode-only scratch register.
+|=======================
+
+
+:sectnums!:
+===== **`dscratch1`**
+
+[cols="<1,<8"]
+[frame="topbot",grid="none"]
+|=======================
+| Name        | Debug scratch register 1
+| Address     | `0x7b3`
 | Reset value | `0x00000000`
 | ISA         | `Zicsr` & `Sdext`
 | Description | The register provides a general purpose debug mode-only scratch register.

@@ -96,7 +96,8 @@ enum NEORV32_CSR_enum {
   /* CPU debug mode CSRs - not accessible by software running outside of debug mode */
   CSR_DCSR           = 0x7b0, /**< 0x7b0 - dcsr:      Debug status and control register */
   CSR_DPC            = 0x7b1, /**< 0x7b1 - dpc:       Debug program counter */
-  CSR_DSCRATCH0      = 0x7b2, /**< 0x7b2 - dscratch0: Debug scratch register */
+  CSR_DSCRATCH0      = 0x7b2, /**< 0x7b2 - dscratch0: Debug scratch register 0 */
+  CSR_DSCRATCH1      = 0x7b3, /**< 0x7b3 - dscratch1: Debug scratch register 1 */
 
   /* custom functions unit (CFU) registers */
   CSR_CFUREG0        = 0x800, /**< 0x800 - cfureg0: custom CFU CSR 0 */

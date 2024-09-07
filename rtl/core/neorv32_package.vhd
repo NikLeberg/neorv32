@@ -383,6 +383,7 @@ package neorv32_package is
   constant csr_dcsr_c           : std_ulogic_vector(11 downto 0) := x"7b0";
   constant csr_dpc_c            : std_ulogic_vector(11 downto 0) := x"7b1";
   constant csr_dscratch0_c      : std_ulogic_vector(11 downto 0) := x"7b2";
+  constant csr_dscratch1_c      : std_ulogic_vector(11 downto 0) := x"7b3";
   -- NEORV32-specific user registers --
   constant csr_cfureg0_c        : std_ulogic_vector(11 downto 0) := x"800";
   constant csr_cfureg1_c        : std_ulogic_vector(11 downto 0) := x"801";

@@ -243,6 +243,7 @@ architecture neorv32_cpu_control_rtl of neorv32_cpu_control is
     dcsr_rd        : std_ulogic_vector(XLEN-1 downto 0); -- debug mode control and status register
     dpc            : std_ulogic_vector(XLEN-1 downto 0); -- mode program counter
     dscratch0      : std_ulogic_vector(XLEN-1 downto 0); -- debug mode scratch register 0
+    dscratch1      : std_ulogic_vector(XLEN-1 downto 0); -- debug mode scratch register 1
     --
     tdata1_execute : std_ulogic; -- enable instruction address match trigger
     tdata1_action  : std_ulogic; -- enter debug mode / ebreak exception when trigger fires
@@ -995,7 +996,7 @@ begin
         csr_valid(2) <= bool_to_ulogic_f(CPU_EXTENSION_RISCV_Zicntr); -- available if Zicntr implemented
 
       -- debug-mode CSRs --
-      when csr_dcsr_c | csr_dpc_c | csr_dscratch0_c =>
+      when csr_dcsr_c | csr_dpc_c | csr_dscratch0_c | csr_dscratch1_c =>
         csr_valid(2) <= bool_to_ulogic_f(CPU_EXTENSION_RISCV_Sdext); -- available if debug-mode implemented
 
       -- trigger module CSRs --
@@ -1428,6 +1429,7 @@ begin
       csr.dcsr_cause     <= (others => '0');
       csr.dpc            <= (others => '0');
       csr.dscratch0      <= (others => '0');
+      csr.dscratch1      <= (others => '0');
       csr.tdata1_execute <= '0';
       csr.tdata1_action  <= '0';
       csr.tdata1_dmode   <= '0';
@@ -1521,6 +1523,11 @@ begin
           when csr_dscratch0_c => -- debug mode scratch register 0
             if CPU_EXTENSION_RISCV_Sdext then
               csr.dscratch0 <= csr.wdata;
+            end if;
+
+          when csr_dscratch1_c => -- debug mode scratch register 1
+            if CPU_EXTENSION_RISCV_Sdext then
+              csr.dscratch1 <= csr.wdata;
             end if;
 
           -- --------------------------------------------------------------------
@@ -1661,6 +1668,7 @@ begin
         csr.dcsr_cause   <= (others => '0');
         csr.dpc          <= (others => '0');
         csr.dscratch0    <= (others => '0');
+        csr.dscratch1    <= (others => '0');
       end if;
 
       -- no trigger module --
@@ -1869,6 +1877,7 @@ begin
           when csr_dcsr_c      => if CPU_EXTENSION_RISCV_Sdext then csr.rdata <= csr.dcsr_rd;   end if; -- debug mode control and status
           when csr_dpc_c       => if CPU_EXTENSION_RISCV_Sdext then csr.rdata <= csr.dpc;       end if; -- debug mode program counter
           when csr_dscratch0_c => if CPU_EXTENSION_RISCV_Sdext then csr.rdata <= csr.dscratch0; end if; -- debug mode scratch register 0
+          when csr_dscratch1_c => if CPU_EXTENSION_RISCV_Sdext then csr.rdata <= csr.dscratch1; end if; -- debug mode scratch register 1
 
           -- --------------------------------------------------------------------
           -- trigger module CSRs

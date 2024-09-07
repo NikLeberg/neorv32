@@ -107,7 +107,7 @@ architecture neorv32_debug_dm_rtl of neorv32_debug_dm is
   -- **********************************************************
 
   -- DM configuration --
-  constant nscratch_c   : std_ulogic_vector(3 downto 0)  := "0001"; -- number of dscratch registers in CPU (=1)
+  constant nscratch_c   : std_ulogic_vector(3 downto 0)  := "0010"; -- number of dscratch registers in CPU (=2)
   constant datasize_c   : std_ulogic_vector(3 downto 0)  := "0001"; -- number of data registers in memory/CSR space (=1)
   constant dataaddr_c   : std_ulogic_vector(11 downto 0) := dm_data_base_c(11 downto 0); -- signed base address of data registers in memory/CSR space
   constant dataaccess_c : std_ulogic                     := '1';    -- 1: abstract data is memory-mapped, 0: abstract data is CSR-mapped

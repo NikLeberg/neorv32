@@ -57,6 +57,7 @@ to check if the targeted bits can actually be modified.
 | 0x7b0 | <<_dcsr>>      | - | DRW | Debug control and status register
 | 0x7b1 | <<_dpc>>       | - | DRW | Debug program counter
 | 0x7b2 | <<_dscratch0>> | - | DRW | Debug scratch register 0
+| 0x7b3 | <<_dscratch1>> | - | DRW | Debug scratch register 1
 5+^| **<<_custom_functions_unit_cfu_csrs>>**
 | 0x800 .. 0x803 | <<_cfureg, `cfureg0`>> .. <<_cfureg, `cfureg3`>> | `CSR_CFUCREG0` .. `CSR_CFUCREG3` | URW | Custom CFU registers 0 to 3
 5+^| **<<_machine_counter_and_timer_csrs>>**
