@@ -96,8 +96,8 @@ package neorv32_package is
   constant base_io_dm_c      : std_ulogic_vector(31 downto 0) := x"ffffff00";
 
   -- On-Chip Debugger - Debug Module Entry Points (Code ROM) --
-  constant dm_exc_entry_c  : std_ulogic_vector(31 downto 0) := x"ffffff00"; -- = base_io_dm_c + 0, exceptions entry point
-  constant dm_park_entry_c : std_ulogic_vector(31 downto 0) := x"ffffff08"; -- = base_io_dm_c + 8, normal entry point
+  constant dm_exc_entry_c  : std_ulogic_vector(31 downto 0) := x"ffffff00"; -- = base_io_dm_c + 0x00, exceptions entry point
+  constant dm_park_entry_c : std_ulogic_vector(31 downto 0) := x"ffffff14"; -- = base_io_dm_c + 0x14, normal entry point
 
 -- **********************************************************************************************************
 -- SoC Definitions
