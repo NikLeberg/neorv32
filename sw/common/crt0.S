@@ -82,6 +82,16 @@ __crt0_reg_file_init:
 
 
 // ************************************************************************************************
+// Continue boot with primary hart
+// ************************************************************************************************
+#ifdef SMP
+__crt0_cpu_primary_hart:
+  csrr x11, mhartid
+  bnez x11, __crt0_cpu_secondary_hart
+#endif
+
+
+// ************************************************************************************************
 // Copy initialized .data section from ROM to RAM (word-wise, section begins and ends on word boundary)
 // ************************************************************************************************
 __crt0_copy_data:
@@ -149,7 +159,6 @@ __crt0_main_exit:   // main's "return" and "exit" will arrive here
   csrw mscratch, a0 // backup main's return code to mscratch (for debugger or destructors)
 
 
-
 // ************************************************************************************************
 // Call destructors
 // ************************************************************************************************
@@ -214,6 +223,53 @@ __crt0_trap_handler_end:
   csrr  x8,   mscratch
 
   mret
+
+
+// ************************************************************************************************
+// Boot of secondary harts.
+// The primary hart did clear .bss and copied the .data section. The secondary cpus jumped here and
+// get their own stack pointer. Then they wait in a wfi loop for an ipi of the primary hart. The
+// ipi interrupt handler will set the mepc to the main C function and continue there.
+// ************************************************************************************************
+#ifdef SMP
+__crt0_cpu_secondary_hart:
+  la    x12,  __crt0_stack_size
+__crt0_cpu_secondary_hart_stack_init_loop:
+  sub   x2,   x2,  x12  // give hart its own initial stack at:
+  add   x11,  x11, -1   // __crt0_ram_last - (__crt0_stack_size * hartid)
+  bgtz  x11,  __crt0_cpu_secondary_hart_stack_init_loop
+
+  la     x12,     __crt0_ipi_trap_handler // configure ipi trap handler
+  csrw   mtvec,   x12
+  csrrwi zero,    mie,  (1 << 3) // enable software interrupt source (MSIP)
+  csrsi  mstatus, 8              // enable machine-level interrupts (MIE)
+
+  j __crt0_shutdown
+
+__crt0_ipi_trap_handler:
+  // check if wake cause was software interrupt
+  csrr  x12,  mcause
+  li    x13,  0x80000003
+  bne   x12,  x13, __crt0_ipi_trap_handler_end
+
+  // clear msip bit of this hart in CLINT
+  // TODO: get clint base address from some #include?
+  la    x12,  0xf0000000 // msip base register
+  csrr  x13,  mhartid
+  sll   x13,  x13, 2     // hartid * 4
+  add   x12,  x12, x13
+  sw    zero, 0(x12)     // clear msip
+
+  // enter C main for secondary CPUs
+  addi  x10,  zero, 0 // x10 = a0 = argc = 0
+  addi  x11,  zero, 0 // x11 = a1 = argv = 0
+  la    x12,  secondary_main // set exception return address to C secondary_main
+  csrw  mepc, x12
+
+__crt0_ipi_trap_handler_end:
+  mret
+#endif
+
 
 .cfi_endproc
 .end

@@ -41,6 +41,14 @@ __neorv32_heap_size = DEFINED(__neorv32_heap_size) ? __neorv32_heap_size : 0;
 __neorv32_rom_base = DEFINED(__neorv32_rom_base) ? __neorv32_rom_base : 0x00000000;
 __neorv32_ram_base = DEFINED(__neorv32_ram_base) ? __neorv32_ram_base : 0x80000000;
 
+/* Number of HARTs */
+__neorv32_num_harts = DEFINED(__neorv32_num_harts) ? __neorv32_num_harts : 1;
+
+/* Default STACK (per HART) size */
+__neorv32_stack_size = DEFINED(__neorv32_stack_size) ? __neorv32_stack_size : 1K;
+
+ASSERT((__neorv32_ram_size >= (__neorv32_num_harts * __neorv32_stack_size + __neorv32_heap_size)), "Error: STACK(s) and HEAP does not fit into RAM.");
+
 
 /* ************************************************************************************************* */
 /* when compiling the bootloader the ROM section is automatically re-mapped to the                   */
@@ -290,6 +298,7 @@ SECTIONS
 /* ************************************************************************************************* */
   PROVIDE(__crt0_max_heap            = __neorv32_heap_size);
   PROVIDE(__crt0_ram_last            = (ORIGIN(ram) + LENGTH(ram)) - 1);
+  PROVIDE(__crt0_stack_size          = __neorv32_stack_size);
   PROVIDE(__crt0_bss_start           = __BSS_START__);
   PROVIDE(__crt0_bss_end             = __BSS_END__);
   PROVIDE(__crt0_copy_data_src_begin = LOADADDR(.data));
