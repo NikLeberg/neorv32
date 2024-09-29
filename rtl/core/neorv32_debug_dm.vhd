@@ -20,7 +20,8 @@ use neorv32.neorv32_package.all;
 entity neorv32_debug_dm is
   generic (
     CPU_BASE_ADDR : std_ulogic_vector(31 downto 0);
-    LEGACY_MODE   : boolean -- false = spec. v1.0, true = spec. v0.13
+    LEGACY_MODE   : boolean; -- false = spec. v1.0, true = spec. v0.13
+    SYSTEM_BUS_EN : boolean  -- implement system bus access
   );
   port (
     -- global control --
@@ -35,7 +36,10 @@ entity neorv32_debug_dm is
     bus_rsp_o      : out bus_rsp_t; -- bus response
     -- CPU control --
     cpu_ndmrstn_o  : out std_ulogic; -- soc reset
-    cpu_halt_req_o : out std_ulogic  -- request hart to halt (enter debug mode)
+    cpu_halt_req_o : out std_ulogic; -- request hart to halt (enter debug mode)
+    -- system bus access --
+    sbus_req_o     : out bus_req_t; -- bus request
+    sbus_rsp_i     : in  bus_rsp_t  -- bus response
   );
 end neorv32_debug_dm;
 
@@ -65,6 +69,8 @@ architecture neorv32_debug_dm_rtl of neorv32_debug_dm is
   constant addr_progbuf0_c     : std_ulogic_vector(6 downto 0) := "0100000";
   constant addr_progbuf1_c     : std_ulogic_vector(6 downto 0) := "0100001";
   constant addr_sbcs_c         : std_ulogic_vector(6 downto 0) := "0111000";
+  constant addr_sbaddress0_c   : std_ulogic_vector(6 downto 0) := "0111001";
+  constant addr_sbdata0_c      : std_ulogic_vector(6 downto 0) := "0111100";
   constant addr_haltsum0_c     : std_ulogic_vector(6 downto 0) := "1000000";
 
   -- RISC-V 32-bit instruction prototypes --
@@ -86,6 +92,11 @@ architecture neorv32_debug_dm_rtl of neorv32_debug_dm is
     abstractauto_autoexecprogbuf : std_ulogic_vector(1 downto 0);
     progbuf                      : progbuf_t;
     command                      : std_ulogic_vector(31 downto 0);
+    sbcs_readonaddr              : std_ulogic;
+    sbcs_readondata              : std_ulogic;
+    sbcs_autoincr                : std_ulogic;
+    sbcs_access                  : std_ulogic_vector(2 downto 0);
+    sb_addr_or_data              : std_ulogic_vector(31 downto 0);
     --
     halt_req    : std_ulogic;
     resume_req  : std_ulogic;
@@ -95,6 +106,14 @@ architecture neorv32_debug_dm_rtl of neorv32_debug_dm is
     clr_acc_err : std_ulogic;
     autoexec_wr : std_ulogic;
     autoexec_rd : std_ulogic;
+    clr_sbbusy  : std_ulogic;
+    clr_sberr   : std_ulogic;
+    autotrig_wr : std_ulogic;
+    autotrig_rd : std_ulogic;
+    sb_addr_wr  : std_ulogic;
+    sb_data_wr  : std_ulogic;
+    sb_busy_rd  : std_ulogic;
+    sb_busy_wr  : std_ulogic;
   end record;
   signal dm_reg : dm_reg_t;
 
@@ -187,6 +206,28 @@ architecture neorv32_debug_dm_rtl of neorv32_debug_dm is
     data_reg      : std_ulogic_vector(31 downto 0); -- memory-mapped data exchange register
   end record;
   signal dci : dci_t;
+
+  -- **********************************************************
+  -- System Bus Access
+  -- **********************************************************
+
+  -- system bus controller --
+  type sb_ctrl_state_t is (SB_IDLE, SB_CHECK, SB_TRIGGER, SB_BUSY, SB_ERROR);
+  type sb_ctrl_t is record
+    -- fsm --
+    state     : sb_ctrl_state_t;
+    busy      : std_ulogic;
+    rw        : std_ulogic; -- 0=read, 1=write
+    -- error flags --
+    err_size  : std_ulogic;
+    err_align : std_ulogic;
+    busyerr   : std_ulogic;
+    err       : std_ulogic_vector(2 downto 0);
+    --
+    addr_reg  : std_ulogic_vector(31 downto 0);
+    data_reg  : std_ulogic_vector(31 downto 0);
+  end record;
+  signal sb_ctrl : sb_ctrl_t;
 
 begin
 
@@ -379,6 +420,131 @@ begin
   end process hart_status;
 
 
+  -- System Bus Controller ------------------------------------------------------------------
+  -- -------------------------------------------------------------------------------------------
+  sb_controller_gen: if SYSTEM_BUS_EN generate
+    sb_controller: process(rstn_i, clk_i)
+    begin
+      if (rstn_i = '0') then
+        sb_ctrl.state     <= SB_IDLE;
+        sb_ctrl.busyerr   <= '0';
+        sb_ctrl.err       <= (others => '0');
+        sb_ctrl.addr_reg  <= (others => '0');
+        sb_ctrl.data_reg  <= (others => '0');
+        sb_ctrl.err_size  <= '0';
+        sb_ctrl.err_align <= '0';
+        sb_ctrl.rw        <= '0';
+      elsif rising_edge(clk_i) then
+        if (dm_reg.dmcontrol_dmactive = '0') then -- DM reset / DM disabled
+          sb_ctrl.state     <= SB_IDLE;
+          sb_ctrl.busyerr   <= '0';
+          sb_ctrl.err       <= (others => '0');
+          sb_ctrl.err_size  <= '0';
+          sb_ctrl.err_align <= '0';
+          sb_ctrl.rw        <= '0';
+        else -- DM active
+
+          -- defaults --
+          sb_ctrl.err_size  <= '0';
+          sb_ctrl.err_align <= '0';
+
+          -- access execution engine --
+          case sb_ctrl.state is
+
+            when SB_IDLE => -- wait for new access request
+            -- ------------------------------------------------------------
+              if (dm_reg.autotrig_wr = '1') or (dm_reg.autotrig_rd = '1') then -- access triggered
+                if (sb_ctrl.err = "000") and (sb_ctrl.busyerr = '0') then -- only trigger if no error
+                  sb_ctrl.state <= SB_CHECK;
+                  sb_ctrl.rw    <= dm_reg.autotrig_wr;
+                end if;
+              end if;
+
+            when SB_CHECK => -- check if access is supported
+              if (dm_reg.sbcs_access /= "010") then             -- not 32-bit
+                sb_ctrl.state     <= SB_IDLE;
+                sb_ctrl.err_size  <= '1';
+              elsif (sb_ctrl.addr_reg(1 downto 0) /= "00") then -- not word aligned
+                sb_ctrl.state     <= SB_IDLE;
+                sb_ctrl.err_align <= '1';
+              else
+                sb_ctrl.state     <= SB_TRIGGER;
+              end if;
+
+            when SB_TRIGGER => -- issue request to bus
+            -- ------------------------------------------------------------
+              sb_ctrl.state <= SB_BUSY;
+
+            when SB_BUSY => -- wait for access to finish
+            -- ------------------------------------------------------------
+              if (sbus_rsp_i.ack = '1') or (sbus_rsp_i.err = '1') then
+                sb_ctrl.state <= SB_IDLE;
+              end if;
+
+            when others => -- undefined
+            -- ------------------------------------------------------------
+              sb_ctrl.state <= SB_IDLE;
+
+          end case;
+
+          -- address register update --
+          -- ------------------------------------------------------------
+          if (dm_reg.sb_addr_wr = '1') then
+            sb_ctrl.addr_reg <= dm_reg.sb_addr_or_data;
+          elsif (sbus_rsp_i.ack = '1') and (dm_reg.sbcs_autoincr = '1') then
+            sb_ctrl.addr_reg <= std_ulogic_vector(unsigned(sb_ctrl.addr_reg) + 4);
+          end if;
+
+          -- data register update --
+          -- ------------------------------------------------------------
+          if (dm_reg.sb_data_wr = '1') then
+            sb_ctrl.data_reg <= dm_reg.sb_addr_or_data;
+          elsif (sbus_rsp_i.ack = '1') and (sb_ctrl.rw = '0') then
+            sb_ctrl.data_reg <= sbus_rsp_i.data;
+          end if;
+
+          -- busy error --
+          -- ------------------------------------------------------------
+          if (dm_reg.sb_busy_rd = '1') or (dm_reg.sb_busy_wr = '1') then
+            sb_ctrl.busyerr <= '1';
+          elsif (dm_reg.clr_sbbusy = '1') then
+            sb_ctrl.busyerr <= '0';
+          end if;
+
+          -- error code --
+          -- ------------------------------------------------------------
+          if (sb_ctrl.err = "000") then -- ready to set new error
+            if (sb_ctrl.err_align = '1') then -- address not word aligned
+              sb_ctrl.err <= "011";
+            elsif (sb_ctrl.err_size = '1') then -- unsupported access size
+              sb_ctrl.err <= "100";
+            elsif (sbus_rsp_i.err = '1') then -- other error, we actually dont know what happened
+              sb_ctrl.err <= "111";
+            end if;
+          elsif (dm_reg.clr_sberr = '1') then -- acknowledge/clear error flags
+            sb_ctrl.err <= "000";
+          end if;
+
+        end if;
+      end if;
+    end process sb_controller;
+
+    -- controller busy flag --
+    sb_ctrl.busy <= '0' when (sb_ctrl.state = SB_IDLE) else '1';
+
+    -- request output --
+    sbus_req_o.addr  <= sb_ctrl.addr_reg;
+    sbus_req_o.data  <= sb_ctrl.data_reg;
+    sbus_req_o.ben   <= "1111";
+    sbus_req_o.stb   <= '1' when (sb_ctrl.state = SB_TRIGGER) else '0';
+    sbus_req_o.rw    <= sb_ctrl.rw;
+    sbus_req_o.src   <= '0';
+    sbus_req_o.priv  <= '1';
+    sbus_req_o.rvso  <= '0';
+    sbus_req_o.fence <= '0';
+  end generate;
+
+
   -- Debug Module Interface - Write Access --------------------------------------------------
   -- -------------------------------------------------------------------------------------------
   dmi_write_access: process(rstn_i, clk_i)
@@ -392,6 +558,20 @@ begin
       --
       dm_reg.command <= (others => '0');
       dm_reg.progbuf <= (others => instr_nop_c);
+      --
+      if (SYSTEM_BUS_EN = true) then
+        dm_reg.sbcs_readonaddr <= '0';
+        dm_reg.sbcs_readondata <= '0';
+        dm_reg.sbcs_autoincr   <= '0';
+        dm_reg.sbcs_access     <= "010"; -- default to 32-bit access
+        dm_reg.sb_addr_or_data <= (others => '0');
+        dm_reg.clr_sbbusy      <= '0';
+        dm_reg.clr_sberr       <= '0';
+        dm_reg.autotrig_wr     <= '0';
+        dm_reg.sb_addr_wr      <= '0';
+        dm_reg.sb_data_wr      <= '0';
+        dm_reg.sb_busy_wr      <= '0';
+      end if;
       --
       dm_reg.halt_req    <= '0';
       dm_reg.resume_req  <= '0';
@@ -407,6 +587,14 @@ begin
       dm_reg.wr_acc_err  <= '0';
       dm_reg.clr_acc_err <= '0';
       dm_reg.autoexec_wr <= '0';
+      if (SYSTEM_BUS_EN = true) then
+        dm_reg.clr_sbbusy  <= '0';
+        dm_reg.clr_sberr   <= '0';
+        dm_reg.autotrig_wr <= '0';
+        dm_reg.sb_addr_wr  <= '0';
+        dm_reg.sb_data_wr  <= '0';
+        dm_reg.sb_busy_wr  <= '0';
+      end if;
 
       -- DMI access --
       if (dmi_wren = '1') then -- valid DMI write request
@@ -473,6 +661,46 @@ begin
           end if;
         end if;
 
+        if (SYSTEM_BUS_EN = true) then
+          -- system bus control --
+          if (dmi_req_i.addr = addr_sbcs_c) then
+            dm_reg.clr_sbbusy      <= dmi_req_i.data(22);           -- sbbusyerror (r/w1c): 1: clear busy error
+            dm_reg.sbcs_readonaddr <= dmi_req_i.data(20);           -- sbreadonaddr (r/w): write access to sbaddress0 triggers sbus read
+            dm_reg.sbcs_access     <= dmi_req_i.data(19 downto 17); -- sbaccess (r/w): sbus access size
+            dm_reg.sbcs_autoincr   <= dmi_req_i.data(16);           -- sbautoincrement (r/w): 1: sbaddress is incr. by sbaccess (in bytes) after sbus access, 0: sbaddress stays unchanged
+            dm_reg.sbcs_readondata <= dmi_req_i.data(15);           -- sbreadondata (r/w): read access to sbdata0 triggers sbus read
+            if (dmi_req_i.data(14 downto 12) = "000") then
+              dm_reg.clr_sberr <= '1';                              -- sberror (r/w1c): clear access error
+            end if;
+          end if;
+
+          -- system bus address --
+          if (dmi_req_i.addr = addr_sbaddress0_c) then
+            if (sb_ctrl.busy = '0') then -- idle
+              dm_reg.sb_addr_or_data <= dmi_req_i.data;
+              dm_reg.sb_addr_wr      <= '1';
+              dm_reg.autotrig_wr     <= dm_reg.sbcs_readonaddr;
+            end if;
+          end if;
+
+          -- system bus data --
+          if (dmi_req_i.addr = addr_sbdata0_c) then
+            if (sb_ctrl.busy = '0') then -- idle
+              dm_reg.sb_addr_or_data <= dmi_req_i.data;
+              dm_reg.sb_data_wr      <= '1';
+              dm_reg.autotrig_wr     <= '1';
+            end if;
+          end if;
+
+          -- write access while busy --
+          if (sb_ctrl.busy = '1') then -- busy
+            if (dmi_req_i.addr = addr_sbaddress0_c) or
+               (dmi_req_i.addr = addr_sbdata0_c) then
+              dm_reg.sb_busy_wr <= '1';
+            end if;
+          end if;
+        end if;
+
       end if;
     end if;
   end process dmi_write_access;
@@ -506,11 +734,19 @@ begin
       dmi_rsp_o.data     <= (others => '0');
       dm_reg.rd_acc_err  <= '0';
       dm_reg.autoexec_rd <= '0';
+      if (SYSTEM_BUS_EN = true) then
+        dm_reg.autotrig_rd <= '0';
+        dm_reg.sb_busy_rd  <= '0';
+      end if;
     elsif rising_edge(clk_i) then
       dmi_rsp_o.ack      <= dmi_wren or dmi_rden; -- always ACK any request
       dmi_rsp_o.data     <= (others => '0'); -- default
       dm_reg.rd_acc_err  <= '0';
       dm_reg.autoexec_rd <= '0';
+      if (SYSTEM_BUS_EN = true) then
+        dm_reg.autotrig_rd <= '0';
+        dm_reg.sb_busy_rd  <= '0';
+      end if;
 
       case dmi_req_i.addr is
 
@@ -596,9 +832,43 @@ begin
         when addr_progbuf1_c =>
           if (LEGACY_MODE = true) then dmi_rsp_o.data <= dm_reg.progbuf(1); else dmi_rsp_o.data <= (others => '0'); end if; -- program buffer 1
 
---      -- system bus access control and status (r/-) --
---      when addr_sbcs_c =>
---        dmi_rsp_o.data <= (others => '0'); -- system bus access not implemented
+        -- system bus access control and status (r/w) --
+        when addr_sbcs_c =>
+          if (SYSTEM_BUS_EN = true) then
+            dmi_rsp_o.data(31 downto 29) <= "001";                  -- sbversion (r/-): implemented version = v1.0
+            dmi_rsp_o.data(28 downto 23) <= (others => '0');        -- reserved (r/-)
+            dmi_rsp_o.data(22)           <= sb_ctrl.busyerr;        -- sbbusyerror (r/w): sbus access initiated while another was in progress?
+            dmi_rsp_o.data(21)           <= sb_ctrl.busy;           -- sbbusy (r/-): sbus access in progress (1) / idle (0)
+            dmi_rsp_o.data(20)           <= dm_reg.sbcs_readonaddr; -- sbreadonaddr (r/w): write access to sbaddress0 triggers sbus read
+            dmi_rsp_o.data(19 downto 17) <= dm_reg.sbcs_access;     -- sbaccess (r/w): sbus access size
+            dmi_rsp_o.data(16)           <= dm_reg.sbcs_autoincr;   -- sbautoincrement (r/w): 1: sbaddress is incr. by sbaccess (in bytes) after sbus access, 0: sbaddress stays unchanged
+            dmi_rsp_o.data(15)           <= dm_reg.sbcs_readondata; -- sbreadondata (r/w): read access to sbdata0 triggers sbus read
+            dmi_rsp_o.data(14 downto 12) <= sb_ctrl.err;            -- sberror (r/w): any error during access?
+            dmi_rsp_o.data(11 downto 5)  <= "0100000";              -- sbasize (r/-): width of system bus addresses in bits = 32
+            dmi_rsp_o.data(4 downto 0)   <= "00100";                -- sbaccess128/64/32/16/8 (r/-): supported accesses = 32-bits
+          else
+            dmi_rsp_o.data <= (others => '0');
+          end if;
+
+        -- system bus address 31:0 (r/w) --
+        when addr_sbaddress0_c =>
+          if (SYSTEM_BUS_EN = true) then
+            dmi_rsp_o.data <= sb_ctrl.addr_reg;
+          else
+            dmi_rsp_o.data <= (others => '0');
+          end if;
+
+        -- system bus data 31:0 (r/w) --
+        when addr_sbdata0_c =>
+          if (SYSTEM_BUS_EN = true) then
+            dmi_rsp_o.data     <= sb_ctrl.data_reg;
+            if (dmi_rden = '1') then
+              dm_reg.sb_busy_rd  <= sb_ctrl.busy;
+              dm_reg.autotrig_rd <= dm_reg.sbcs_readondata;
+            end if;
+          else
+            dmi_rsp_o.data <= (others => '0');
+          end if;
 
         -- halt summary 0 (r/-) --
         when addr_haltsum0_c =>

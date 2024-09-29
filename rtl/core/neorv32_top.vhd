@@ -31,6 +31,7 @@ entity neorv32_top is
     -- On-Chip Debugger (OCD) --
     ON_CHIP_DEBUGGER_EN        : boolean                        := false;       -- implement on-chip debugger
     DM_LEGACY_MODE             : boolean                        := false;       -- debug module spec version: false = v1.0, true = v0.13
+    DM_SYSTEM_BUS_EN           : boolean                        := false;       -- implement system bus access
 
     -- RISC-V CPU Extensions --
     CPU_EXTENSION_RISCV_A      : boolean                        := false;       -- implement atomic memory operations extension?
@@ -274,9 +275,9 @@ architecture neorv32_top_rtl of neorv32_top is
   -- debug core interface (DCI) --
   signal dci_ndmrstn, dci_halt_req : std_ulogic;
 
-  -- bus: core complex (CPU + caches) and DMA --
-  signal cpu_i_req, cpu_d_req, icache_req, dcache_req, core_req, main_req, main2_req, dma_req : bus_req_t;
-  signal cpu_i_rsp, cpu_d_rsp, icache_rsp, dcache_rsp, core_rsp, main_rsp, main2_rsp, dma_rsp : bus_rsp_t;
+  -- bus: core complex (CPU + caches) + DMA + DM --
+  signal cpu_i_req, cpu_d_req, icache_req, dcache_req, core_req, core2_req, main_req, main2_req, dma_req, dm_req : bus_req_t;
+  signal cpu_i_rsp, cpu_d_rsp, icache_rsp, dcache_rsp, core_rsp, core2_rsp, main_rsp, main2_rsp, dma_rsp, dm_rsp : bus_rsp_t;
 
   -- bus: main sections --
   signal imem_req, dmem_req, xipcache_req, xip_req, boot_req, io_req, xcache_req, xbus_req : bus_req_t;
@@ -627,8 +628,8 @@ begin
       a_rsp_o  => core_rsp,
       b_req_i  => dma_req,
       b_rsp_o  => dma_rsp,
-      x_req_o  => main_req,
-      x_rsp_i  => main_rsp
+      x_req_o  => core2_req,
+      x_rsp_i  => core2_rsp
     );
 
   end generate; -- /neorv32_dma_complex_true
@@ -636,9 +637,40 @@ begin
   neorv32_dma_complex_false:
   if not IO_DMA_EN generate
     iodev_rsp(IODEV_DMA) <= rsp_terminate_c;
-    main_req             <= core_req;
-    core_rsp             <= main_rsp;
+    core2_req            <= core_req;
+    core_rsp             <= core2_rsp;
     firq(FIRQ_DMA)       <= '0';
+  end generate;
+
+  
+  neorv32_dm_complex_true:
+  if DM_SYSTEM_BUS_EN generate
+
+    -- DM Bus Switch --------------------------------------------------------------------------
+    -- -------------------------------------------------------------------------------------------
+    neorv32_dm_bus_switch_inst: entity neorv32.neorv32_bus_switch
+    generic map (
+      PORT_A_READ_ONLY => false,
+      PORT_B_READ_ONLY => false
+    )
+    port map (
+      clk_i    => clk_i,
+      rstn_i   => rstn_sys,
+      a_lock_i => '0',       -- no exclusive accesses for port A
+      a_req_i  => core2_req, -- prioritized
+      a_rsp_o  => core2_rsp,
+      b_req_i  => dm_req,
+      b_rsp_o  => dm_rsp,
+      x_req_o  => main_req,
+      x_rsp_i  => main_rsp
+    );
+
+  end generate; -- /neorv32_dma_complex_true
+
+  neorv32_dm_complex_false:
+  if not DM_SYSTEM_BUS_EN generate
+    main_req  <= core2_req;
+    core2_rsp <= main_rsp;
   end generate;
 
 
@@ -1613,7 +1645,8 @@ begin
     neorv32_debug_dm_inst: entity neorv32.neorv32_debug_dm
     generic map (
       CPU_BASE_ADDR => base_io_dm_c,
-      LEGACY_MODE   => DM_LEGACY_MODE
+      LEGACY_MODE   => DM_LEGACY_MODE,
+      SYSTEM_BUS_EN => DM_SYSTEM_BUS_EN
     )
     port map (
       clk_i          => clk_i,
@@ -1624,7 +1657,9 @@ begin
       bus_req_i      => iodev_req(IODEV_OCD),
       bus_rsp_o      => iodev_rsp(IODEV_OCD),
       cpu_ndmrstn_o  => dci_ndmrstn,
-      cpu_halt_req_o => dci_halt_req
+      cpu_halt_req_o => dci_halt_req,
+      sbus_req_o     => dm_req,
+      sbus_rsp_i     => dm_rsp
     );
 
   end generate;
